@@ -12,6 +12,7 @@ process for each connection
 #include <sys/wait.h> /* for the waitpid() system call */
 #include <signal.h> /* signal name macros, and the kill() prototype */
 #include <unistd.h>
+#include <time.h>
 
 void sigchld_handler(int s)
 {
@@ -88,11 +89,20 @@ int main(int argc, char *argv[])
     return 0; /* we never get here */
 }
 
-/******** DOSTUFF() *********************
-There is a separate instance of this function 
-for each connection.  It handles all communication
-once a connnection has been established.
-*****************************************/
+unsigned char*
+file_to_str(FILE* file, unsigned int* len) {
+
+    fseek(file, 0L, SEEK_END);
+    *len = ftell(file);
+    fseek(file, 0L, SEEK_SET);
+
+    unsigned char* fileContents = malloc(*len+1);
+    bzero(fileContents, *len+1);
+
+    fread(fileContents, 1, *len, file); 
+
+    return fileContents;
+}
 
 void dostuff(int sock)
 {
@@ -113,6 +123,7 @@ void dostuff(int sock)
             requestBufSize *= 2;
         }
 
+        // copy newly read bytes into request string
         memcpy(request+numChars, buffer, n);
         numChars += n;
 
@@ -129,13 +140,72 @@ void dostuff(int sock)
     if (n < 0) {
         error("ERROR reading from socket");
     }
+    
     request = realloc(request, ++requestBufSize);
     request[requestBufSize-1] = 0;
     printf("%s\n", request);
 
-    n = write(sock, "I got your message", 18);
+    int requestLineLength = strstr(request, "\r\n") - request;
+    int fileNameLength = requestLineLength - 14;
+    
+    char* fileName = malloc(fileNameLength+1);
+    int i;
+    for (i = 5; i < fileNameLength+5; i++) {
+        fileName[i-5] = request[i];
+    }
+    fileName[i-5] = 0;
+    
+    FILE* file = fopen(fileName, "rb");
+    
+    if (!file) {
+        n = write(sock, "HTTP/1.1 404 Not Found\r\n\r\n", 30);
+        if (n < 0) {
+            error("ERROR writing to socket");
+        }
+      
+        free(request);
+        free(fileName);
+        return;
+    }
+    
+    unsigned int fileLength;
+    unsigned char* fileContents = file_to_str(file, &fileLength);
+    char contentLength[11];
+    bzero(contentLength, 11);
+    sprintf(contentLength, "%u", fileLength);
+    fclose(file);
+    
+    char mimeTypeBuf[512];
+    sprintf(mimeTypeBuf, "file -b --mime %s", fileName);
+    
+    FILE *mimeType = popen(mimeTypeBuf, "r");
+ 
+    char contentType[256];
+    fscanf(mimeType, "%[^\n]s", contentType);
+    
+    pclose(mimeType);
+    
+    
+    char date[1000];
+    bzero(date, 1000);
+    time_t now = time(0);
+    struct tm tm = *gmtime(&now);
+    strftime(date, sizeof date, "%a, %d %b %Y %H:%M:%S %Z", &tm);
 
+    unsigned int responseLength = 80 + strlen(date) + strlen(contentType) + strlen(contentLength) + fileLength;
+    char* responseMSG = malloc(responseLength);
+    bzero(responseMSG, responseLength);
+    sprintf(responseMSG, "HTTP/1.1 200 OK\r\nDate: %s\r\nConnection: close\r\nContent-Type: %s\r\nContent-Length: %s\r\n\r\n", date, contentType, 
+            contentLength);
+    memcpy(responseMSG + (responseLength - fileLength), fileContents, fileLength);
+    n = write(sock, responseMSG, responseLength);
+    
     if (n < 0) {
         error("ERROR writing to socket");
     }
+    
+    free(request);
+    free(fileName);
+    free(fileContents);
+    free(responseMSG);
 }
