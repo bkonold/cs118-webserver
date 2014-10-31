@@ -185,12 +185,12 @@ void dostuff(int sock)
     
     pclose(mimeType);
     
+    char date[512];
+    bzero(date, 512);
     
-    char date[1000];
-    bzero(date, 1000);
-    time_t now = time(0);
-    struct tm tm = *gmtime(&now);
-    strftime(date, sizeof date, "%a, %d %b %Y %H:%M:%S %Z", &tm);
+    time_t epochTime = time(0);
+    struct tm currTime = *gmtime(&epochTime);
+    strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %Z", &currTime);
 
     unsigned int responseLength = 80 + strlen(date) + strlen(contentType) + strlen(contentLength) + fileLength;
     char* responseMSG = malloc(responseLength);
